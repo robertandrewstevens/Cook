@@ -1,0 +1,138 @@
+---
+title: "how-to-compute-jincx"
+author: "Robert A. Stevens"
+date: "March 22, 2015"
+output: html_document
+---
+
+http://www.johndcook.com/blog/2012/02/02/how-to-compute-jincx/
+
+## How to compute jinc(x)
+
+Posted on 2 February 2012 by John
+
+The function jinc(x) that I wrote about yesterday is almost trivial to implement, but not quite. I’ll explain why it’s not quite as easy as it looks and how one might implement it in C and Python.
+
+The function jinc(x) is defined as J1(x) / x, so if you have code to compute J1 then it ought to be a no-brainer. For example, why not use the following C code?
+
+    #include <math.h>
+    double jinc(double x) {
+        return j1(x) / x;
+    }
+
+The problem is that if you pass in 0, the code will divide by 0 and return a NaN. The function jinc(x) is defined to be 1/2 at x = 0 because that’s the limit of J1(x)(x) / x as x goes to 0. So we try again:
+
+    #include <math.h>
+    double jinc(double x) {
+        return (x == 0.0) ? 0.5 : j1(x) / x;
+    }
+
+Does that work? Technically, it could still fail — we’ll come back to that at the end — but we’ll assume for now that it’s OK.
+
+We could write the analogous Python code, and it would be adequate as long as we’re only calling the function with scalars and not NumPy arrays.
+
+```{r, engine='python', comment=NA}
+from scipy.special import j1
+def jinc(x):
+    if x == 0.0:
+        return 0.5
+    return j1(x) / x
+```
+
+Now suppose you want to plot this function. You create an array of points, say
+
+```{r, engine='python', comment=NA}
+import numpy as np
+x = np.linspace(-1, 1, 25)
+```
+
+and plot jinc(x). You’ll get a warning: “ValueError: The truth value of an array with one element is ambiguous. Use a.any() or a.all().” Incidentally, if we called linspace with an even integer in the last argument, our array of points would avoid zero and the naive implementation of jinc would work.
+
+When Python tries to apply jinc to an array, it doesn’t know how to interpret the test x == 0. The warning suggests “Do you mean if any component of x is 0? Or if all components of x are 0?” Neither option is what we want. We want to apply jinc as written to each element of x. We could do this by calling the vectorize function.
+
+```{r, engine='python', comment=NA}
+jinc = np.vectorize(jinc)
+```
+
+This replaces our original jinc function with one that handles NumPy arrays correctly.
+
+There is an extremely unlikely scenario in which the code above could fail. The value of J1(x) is approximately x/2 for small values of x. If the floating point value x is so small that 0.5*x returns 0, our function will return 0, even though it should return 0.5. The C code above works for values of x as small as DBL_MIN and even values much smaller. (DBL_MIN is not the smallest value of a double, only the smallest normalized double.) But if you set
+
+    x = DBL_MIN / pow(2.0, 52);
+
+then jinc(x) will return 0. If you want to be absolutely safe, you could change the implementation to
+
+    #include <math.h>
+    double jinc(double x) {
+        return (fabs(x) < 1e-8) ? 0.5 : j1(x) / x;
+    }
+
+Why test for whether the absolute value is less than 10-8 rather than a much smaller number? For small x, the error in approximating jinc(x) with 1/2 is on the order of x2/16. So for x as large as 10-8, the approximation error is below the resolution of a double. As a bonus, the function jinc(x) will be more efficient for |x| < 10-8 since it avoids a call to j1.
+
+## Related posts:
+
+- Jinc function
+
+- Sine approximation for small angles
+
+- Functions in math.h that seem unnecessary
+
+## 11 thoughts on “How to compute jinc(x)”
+
+*Juanlu001 2 February 2012 at 10:38*
+
+I don’t understand the second part: jinx(x) is meant to be 1/2 for small x and not x/2, so I cannot see where’s the problem you are trying yo address with the last snippet.
+
+On the other hand, the vectorize() thing is very useful for piecewise defined functions, functions with singular values such as sinc(x) if one had to define it, etc.
+
+*John 2 February 2012 at 11:06*
+
+Jauanlu: Thanks for pointing that out. I had said “jinc” when I meant to say J1. For small x, J1(x) is approximately x/2. I corrected the post.
+
+*Juanlu001 2 February 2012 at 12:02*
+
+Ah right, I understand now, thanks.
+
+*Canageek 3 February 2012 at 16:10*
+
+For those of us not familiar with higher level math could you explain what you would use a function like this for? I’m finishing a chemistry degree, so when I think odd function I think wavefunction of an electron, or of trying to model some physical process. I’m sure I’ve heard of sinc before (probably in my quantum mechanics class) but would have no idea what you would use either of those functions for.
+
+*John 3 February 2012 at 19:42*
+
+Bessel functions often come up in physics problems stated in cylindrical coordinates, so often that they’re called “cylindrical functions.” They also come up in many other contexts.
+
+I’m not as familiar with the jinc function in particular. One place it comes up is in the Fourier transform of a function that has value 1 inside a disk and 0 outside. In that sense it’s analogous to the sinc function, the Fourier transform of a function that’s 1 inside an interval and 0 elsewhere.
+
+*Alessandro 5 February 2012 at 03:41*
+
+Why do you use 1e-8 in the last code snippet?
+
+Because (1e-8)^2 (the size of the error in approximating jinc with 1/2) will be almost equal to std::numeric_limits<double>::epsilon() ?
+
+*John 5 February 2012 at 11:16*
+
+Alessandro: The Taylor series for jinc(x) is x/2 + x^2/16 + O(x^4). If x = 1e-8, then x^2/16 = 6.25e-18. Adding the quadratic term would make no difference because 0.5 + 6.25e-18 = 0.5 in IEEE 754 double precision arithmetic.
+
+*Emery Carr 21 February 2013 at 16:46*
+
+In Real Computing Made Real, Forman Acton gives an implementation of the sinc function which uses a truncated Taylor series expansion directly for small values of x, i.e. (fabs(x) < .1) ? (1.0 – x^2 * (1.0 – x^2/20.0)/6.0) ? sin(x)/x . The idea is to preserve more significant figures for small values. Perhaps something similar could be useful for jinc(x)?
+
+*David M. Baker 8 January 2015 at 18:33*
+
+A quick plot of the inequality near the limit
+
+1/2+x^2 > 1/2+x^2/16+x^4/384 for x = 1 to -1
+
+in WolframAlpha shows that near the limit the left side of the inequality is always greater than the right. This might imply a simple test in code to be
+
+(0.5d + x*x == 0.5d) ? 0.5d : j1(x) / x
+
+The same may be said for the sinc function
+
+1+x^2 > 1-x^2/6+x^4/120-x^6/5040
+
+In this case the left side is always greater than the right. The code test would be
+
+(1.0d + x*x == 1.0d) ? 1.0d : sin(x) / x
+
+Are these tests reasonable? In these tests, the series on the right will evaluate to the first term to machine precision before the left. I guess the question is: will the expression on the left evaluate to its first term before any damage is done in the primary equation? That is, can we get a bad result from j1(x) / x before 0.5d + x*x == 0.5d?
